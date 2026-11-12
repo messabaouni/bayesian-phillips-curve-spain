@@ -12,12 +12,19 @@ The analysis includes convergence traces, posterior distributions by region, and
 
 **Main findings:** economic growth is clearly associated with higher inflation, while the unemployment effect is weaker and varies by region. The Phillips curve does not hold uniformly across regions.
 
+## Reading the report
+The report builds the models in steps, from a simple model to the full hierarchical Gamma model, so that each added feature (region-specific slopes, non-linear terms, a Gamma likelihood) can be justified. Diagnostics use trace plots and posterior predictive checks. The full write-up is in `report/report.pdf` (in Spanish).
+
+## Data note
+The regional data (GDP, labour costs, inflation and unemployment by autonomous community, 2018 onwards) comes from Spanish public statistics. The exact source tables are not documented in the repository, so check the original providers' terms before reusing the data.
+
 ## Structure
 ```
 data/data.csv    regional panel (region, year, GDP, labour cost, inflation, unemployment, GDP growth)
 stan/            the three Stan models
 R/analysis.R     model fitting script
-report/report.Rmd  full report with the analysis (in Spanish)
+report/report.Rmd  full report source (in Spanish)
+report/report.pdf  rendered report
 ```
 
 ## How to run
@@ -29,5 +36,5 @@ Render the report with `rmarkdown::render("report/report.Rmd")`.
 
 Packages: rstan, bayesplot, posterior, dplyr, tidyr, ggplot2, patchwork, readr, knitr, tibble.
 
-## Author
-Mohammed Essabaouni
+## Authors
+Julia Anglada and Mohammed Essabaouni
