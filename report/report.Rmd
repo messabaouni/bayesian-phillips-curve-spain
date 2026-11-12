@@ -1,0 +1,570 @@
+---
+title: 'La Curva de Phillips Regional en España: Un Enfoque Bayesiano Jerárquico'
+author: "Mohammed Essabaouni"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+fontsize: 12pt
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = FALSE,
+	message = FALSE,
+	warning = FALSE
+)
+```
+
+```{r}
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(knitr)
+library(tidyr)    
+library(bayesplot) 
+library(rstan)
+library(bayesplot)
+library(patchwork)
+library(posterior)
+library(tibble)
+```
+
+# Resumen
+
+Este trabajo analiza la validez de la Curva de Phillips en el contexto regional de España mediante un enfoque bayesiano jerárquico. Se estima un modelo que relaciona la inflación con el desempleo, el crecimiento del PIB y el coste salarial, permitiendo que los efectos varíen entre comunidades autónomas. Para capturar adecuadamente la naturaleza positiva y asimétrica de la inflación, se utiliza una distribución Gamma. Los resultados muestran que el crecimiento económico es un factor claramente asociado a mayores niveles de inflación, mientras que el desempleo presenta una relación más débil y heterogénea. El modelo evidencia que la Curva de Phillips no se cumple de forma uniforme en todas las regiones, lo que sugiere la influencia de factores estructurales y dinámicas locales diferenciadas.
+
+# Introducción
+
+La Curva de Phillips es un referente clásico en la macroeconomía que plantea una relación inversa entre la inflación y el desempleo. Aunque su validez ha sido objeto de debate en contextos agregados, son escasos los estudios que analizan su comportamiento a nivel regional, especialmente en países con una marcada heterogeneidad territorial como España. Este trabajo se propone evaluar empíricamente la Curva de Phillips en el ámbito regional español, combinando teoría macroeconómica con técnicas bayesianas jerárquicas que permiten modelar las diferencias estructurales entre comunidades autónomas.
+
+La formulación clásica de la Curva de Phillips establece una relación negativa entre la inflación y el desempleo:
+
+$$
+\pi_t = \pi^e_t - \beta (u_t - u^*) + \varepsilon_t
+$$
+
+donde:
+
+-   $\pi_t$: tasa de inflación observada en el periodo $t$
+-   $\pi^e_t$: inflación esperada
+-   $u_t$: tasa de desempleo
+-   $u^*$: tasa de desempleo natural o de equilibrio
+-   $\beta > 0$: pendiente de la curva
+-   $\varepsilon_t$: término de error o shock no anticipado
+
+El objetivo de este trabajoes evaluar empíricamente la validez de la Curva de Phillips en el contexto regional de España, donde las diferencias estructurales y económicas entre comunidades autónomas podrían modificar la relación clásica entre inflación y paro. Para ello, se plantea un modelo bayesiano jerárquico que permite capturar la heterogeneidad territorial, estimando efectos específicos por región y compartiendo información a nivel global. La variable de respuesta es la inflación, medida como una tasa positiva y continua, mientras que las variables explicativas incluyen el paro, el PIB per cápita, el crecimiento del PIB y el coste salarial medio.
+
+Desde un punto de vista metodológico, el enfoque jerárquico ofrece una ventaja significativa: permite estimar efectos específicos para cada región, manteniendo una estructura común que facilita la inferencia compartida y la comparación. Además, el uso de una distribución Gamma para modelar la inflación permite capturar su naturaleza casi siempre positiva y asimétrica, algo que distribuciones como la normal no reflejan adecuadamente.
+
+El análisis se basa en un conjunto de datos recopilado a partir de fuentes oficiales como el Instituto Nacional de Estadística (INE). El dataset contiene observaciones anuales para 19 regiones españolas e incluye las siguientes variables:
+
+-   **Inflación**: tasa de variación interanual del Índice de Precios al Consumo (IPC), expresada en porcentaje. Es la variable dependiente del modelo y se asume estrictamente positiva.
+-   **Tasa de paro** (`paro`): porcentaje de la población activa que se encuentra desempleada.
+-   **PIB per cápita** (`pib`): nivel de riqueza económica relativa por persona, medido en euros constantes.
+-   **Crecimiento del PIB** (`pib_growth`): variación porcentual anual del PIB, que actúa como indicador del ciclo económico.
+-   **Coste salarial medio** (`salarycost`): media anual del coste salarial por trabajador, en euros.
+
+A modo ilustrativo, a continuación se muestra una tabla con una pequeña muestra del conjunto de datos empleado:
+
+```{r}
+data <- read.csv("../data/data.csv", sep = ";")
+kable(head(data, 5), caption = "Muestra de las primeras observaciones del conjunto de datos")
+```
+
+Estas variables han sido estandarizadas para facilitar la interpretación de los coeficientes y mejorar la eficiencia del muestreo MCMC.
+
+
+
+# Análisis
+
+## Análisis Exploratorio
+
+Antes de plantear y ajustar el modelo bayesiano, realizamos un análisis exploratorio de los datos para comprender la distribución de las variables y detectar posibles patrones o valores atípicos. Este paso es fundamental para evaluar la viabilidad de los supuestos del modelo y la necesidad de transformaciones o filtrados previos.
+
+A continuación se muestran las estadísticas descriptivas básicas del conjunto de datos:
+
+```{r}
+kable(summary(data))
+```
+
+Se observa que la variable de inflación presenta valores tanto positivos como cercanos a cero, e incluso algunos negativos, lo que motivó el uso de una distribución Gamma truncada a valores positivos. Para resolver este inconveniente, se ha filtrado el conjunto de datos eliminando observaciones con inflación no positiva.
+
+El histograma de la inflación muestra una clara **asimetría positiva**, con una mayor concentración de valores en torno a 1–4% y una cola que se extiende hacia inflaciones más elevadas:
+
+```{r echo=FALSE, fig.width = 5, fig.height = 3}
+hist(data$inflation,
+     breaks = 20,
+     col = "lightblue",
+     main = "Distribución de la inflación regional",
+     xlab = "Inflación (%)")
+```
+
+También examinamos la relación bivariada entre inflación y algunas de las covariables principales:
+
+```{r, fig.width = 5, fig.height = 3 }
+pairs(~ inflation + paro + pib + pib_growth + salarycost, data = data,
+      main = "Relaciones entre variables",
+      pch = 19, col = "blue")
+```
+
+Estas gráficas sugieren una correlación positiva moderada entre el crecimiento del PIB y la inflación, mientras que la relación entre inflación y desempleo es menos clara y potencialmente no lineal. El coste salarial medio no parece mostrar una asociación evidente con la inflación a simple vista. Estos resultados justifican el uso de un modelo flexible que permita relaciones diferenciadas entre regiones y la inclusión de términos cuadráticos o de interacción si fuera necesario.
+
+
+## Modelo Bayesiano
+
+Para analizar la relación entre inflación y desempleo a nivel regional en España, proponemos un modelo **bayesiano jerárquico** en el que la variable de respuesta se modela con una distribución **Gamma**. Esta elección refleja dos propiedades fundamentales de los datos:
+
+-   La inflación es una variable **estrictamente positiva**.
+
+-   Su distribución empírica presenta una **asimetría positiva**, con colas más pesadas hacia la derecha.
+
+Además, se impone una estructura jerárquica sobre los parámetros regionales (interceptos y pendientes), permitiendo capturar la **heterogeneidad territorial** sin renunciar a una inferencia global coherente.
+
+```{r, cache=TRUE}
+
+options(mc.cores = parallel::detectCores())
+data_std <- data %>%
+  mutate(region_id = as.integer(as.factor(region))) %>%
+  mutate(
+    paro = scale(paro)[,1],
+    pib = scale(pib)[,1],
+    pib_growth = scale(pib_growth)[,1],
+    salarycost = scale(salarycost)[,1]
+  ) %>%
+  filter(inflation > 0)
+
+stan_data <- list(
+  N = nrow(data_std),
+  R = length(unique(data_std$region_id)),
+  region = data_std$region_id,
+  paro = data_std$paro,
+  pib = data_std$pib,
+  pib_growth = data_std$pib_growth,
+  salarycost = data_std$salarycost,
+  inflation = data_std$inflation
+)
+```
+
+```{r, cache=TRUE}
+simple_fit <- stan(
+  file = "../stan/modelo_simple.stan",
+  data = stan_data,
+  iter = 4000,
+  warmup = 2000,
+  chains = 4,
+  seed = 123,
+  control = list(adapt_delta = 0.95, max_treedepth = 15)
+)
+```
+
+```{r, cache=TRUE}
+intermedio_fit <- stan(
+  file = "../stan/modelo_intermedio.stan",
+  data = stan_data,
+  iter = 4000,
+  warmup = 2000,
+  chains = 4,
+  seed = 123,
+  control = list(adapt_delta = 0.95, max_treedepth = 15)
+)
+```
+
+```{r, cache=TRUE}
+gamma_fit <- stan(
+  file = "../stan/modelo_gamma.stan",
+  data = stan_data,
+  iter = 4000,
+  warmup = 2000,
+  chains = 4,
+  seed = 123,
+  control = list(adapt_delta = 0.95, max_treedepth = 15)
+)
+```
+
+## Formulación del modelo
+
+Para facilitar la convergencia y ganar interpretabilidad progresiva, se adoptó un enfoque escalonado en la construcción del modelo bayesiano. En una primera etapa, se estimó un **modelo simple** con distribución normal, en el que solo el intercepto varía entre regiones y todas las pendientes son comunes. Esta especificación permite identificar la contribución básica de cada covariable a la inflación, partiendo de una estructura homogénea. La formulación es:
+
+$$
+\text{Inflation}_i \sim \mathcal{N}(\mu_i, \sigma), \quad \mu_i = \alpha_{r[i]} + \beta_1 \cdot \text{paro}_i + \beta_2 \cdot \text{pib}_i + \beta_3 \cdot \text{pib\_growth}_i + \beta_4 \cdot \text{salary}_i
+$$
+
+con $\alpha_{r[i]} \sim \mathcal{N}(\mu_\alpha, \sigma_\alpha)$, y el resto de coeficientes constantes.
+
+En una segunda etapa, se introdujo una complejidad **intermedia**, permitiendo que la pendiente asociada al desempleo también varíe entre regiones. Esta decisión se fundamenta tanto en evidencia empírica como en teoría económica, que sugiere que la relación entre paro e inflación puede depender de factores estructurales regionales. La media esperada se expresa ahora como:
+
+$$
+\mu_i = \alpha_{r[i]} + \beta^{\text{paro}}_{r[i]} \cdot \text{paro}_i + \beta_2 \cdot \text{pib}_i + \beta_3 \cdot \text{pib\_growth}_i + \beta_4 \cdot \text{salary}_i
+$$
+
+con $\beta^{\text{paro}}_{r[i]} \sim \mathcal{N}(\mu_{\beta_1}, \sigma_{\beta_1})$.
+
+Finalmente, se extendió el modelo completo para capturar mejor la naturaleza empírica de la variable dependiente: la inflación es estrictamente positiva y asimétrica. Por ello, se adoptó una distribución **Gamma**, más adecuada para fenómenos económicos con colas a la derecha. Además, se añadieron términos funcionales no lineales, como $\text{paro}_i^2$ y la interacción $\text{paro}_i \cdot \text{pib}_i$, así como jerarquía sobre todas las pendientes. La formulación log-lineal de la media queda:
+
+$$
+\log(\mu_i) = \alpha_{r[i]} + \sum_{j=1}^4 \beta^{(j)}_{r[i]} x^{(j)}_i + \beta_5 \cdot \text{paro}_i^2 + \beta_6 \cdot (\text{paro}_i \cdot \text{pib}_i)
+\quad 
+$$ 
+
+con 
+
+$$\quad \text{Inflation}_i \sim \text{Gamma}(\text{shape}, \text{rate}_i = \text{shape}/\mu_i) $$
+
+## Priors y Hiperparámetros
+
+La estructura jerárquica y funcional del modelo se completa con la siguiente especificación de distribuciones previas:
+
+-   Intercepto global: $\mu_\alpha \sim \mathcal{N}(\log(1.02), 1)$, lo que incorpora el objetivo del 2% del BCE como expectativa a priori.
+-   Dispersión regional del intercepto: $\sigma_\alpha \sim \text{HalfNormal}(0, 1)$
+-   Efectos globales (medias de las pendientes): $\mu_{\beta}^{(j)} \sim \mathcal{N}(0, 1)$
+-   Dispersión de pendientes regionales: $\sigma_{\beta}^{(j)} \sim \text{HalfNormal}(0, 1)$
+-   Coeficientes funcionales: $\beta_5, \beta_6 \sim \mathcal{N}(0, 1)$
+-   Parámetro de forma de la distribución Gamma: $\text{shape} \sim \text{Gamma}(2, 1)$
+
+Para cada observación $i = 1, \dots, N$, correspondiente a una región $r[i]$, se modela la inflación como:
+
+$$
+\text{Inflation}_i \sim \text{Gamma}(\text{shape}, \text{rate}_i), \quad \text{donde} \quad \text{rate}_i = \frac{\text{shape}}{\mu_i}
+$$
+
+La media esperada $\mu_i$ se define como:
+
+$$
+\log(\mu_i) = \eta_i = \alpha_{r[i]} + \beta^{(1)}_{r[i]} \cdot \text{paro}_i + \beta^{(2)}_{r[i]} \cdot \text{pib}_i + \beta^{(3)}_{r[i]} \cdot \text{pib\_growth}_i + \beta^{(4)}_{r[i]} \cdot \text{salarycost}_i + \beta_5 \cdot \text{paro}_i^2 + \beta_6 \cdot (\text{paro}_i \cdot \text{pib}_i)
+$$
+
+con la siguiente estructura jerárquica:
+
+$$
+\begin{aligned}
+\alpha_r &\sim \mathcal{N}(\mu_\alpha, \sigma_\alpha) \\
+\beta_r^{(j)} &\sim \mathcal{N}(\mu_{\beta}^{(j)}, \sigma_{\beta}^{(j)}), \quad j = 1, \dots, 4 \\
+\mu_\alpha &\sim \mathcal{N}(\log(1.02), 1) \\
+\sigma_\alpha, \sigma_{\beta}^{(j)} &\sim \text{HalfNormal}(0, 1) \\
+\mu_{\beta}^{(j)} &\sim \mathcal{N}(0, 1) \\
+\beta_5, \beta_6 &\sim \mathcal{N}(0, 1) \\
+\text{shape} &\sim \text{Gamma}(2, 1)
+\end{aligned}
+$$
+
+Este modelo permite reflejar adecuadamente la naturaleza positiva y asimétrica de la inflación, evitando los supuestos irrealistas de simetría implícitos en modelos normales. La estructura jerárquica incorporada posibilita capturar diferencias regionales tanto en los niveles medios de inflación (interceptos) como en la influencia de las variables explicativas (pendientes), lo que resulta especialmente relevante en un contexto territorialmente heterogéneo como el español. Asimismo, el modelo incluye términos funcionales adicionales que permiten representar posibles no linealidades, como el efecto cuadrático del desempleo, y sinergias económicas a través de interacciones, como la de paro y PIB.
+
+Por último, la elección del prior sobre el intercepto global $\mu_\alpha$ se apoya en una base teórica macroeconómica sólida: al asumir una distribución normal centrada en $\log(1.02)$.), se incorpora explícitamente el objetivo de inflación del Banco Central Europeo del 2% como expectativa central del modelo.
+
+
+# Resultados
+
+Tras ajustar los modelos bayesiano jerárquico, se analizan las distribuciones posteriores de los parámetros clave para evaluar la validez empírica de la Curva de Phillips a nivel regional. El análisis se organiza en torno a los parámetros globales, los resultados estimados y la evaluación de la capacidad predictiva del modelo.
+
+## Trazas de convergencia para los tres modelos
+
+Se muestran a continuación las trazas MCMC de los parámetros principales en cada una de las especificaciones consideradas: modelo simple, modelo intermedio y modelo completo con distribución Gamma. Estas gráficas permiten evaluar visualmente la mezcla y estabilidad de las cadenas para cada modelo.
+
+```{r fig.height=7, fig.width=10, message=FALSE, warning=FALSE}
+
+
+theme_trace <- theme_minimal(base_size = 8) +
+  theme(legend.position = "bottom",
+        plot.title = element_text(size = 10, face = "bold"))
+
+# Trazas por modelo con ajustes
+trace_simple <- mcmc_trace(simple_fit,
+                           pars = c("beta_paro", "beta_pib", "beta_growth", "beta_salary")) +
+  ggtitle("Modelo simple") +
+  theme_trace
+
+trace_intermedio <- mcmc_trace(intermedio_fit,
+                                pars = c("mu_beta_paro", "beta_pib", "beta_growth", "beta_salary")) +
+  ggtitle("Modelo intermedio") +
+  theme_trace
+
+trace_gamma <- mcmc_trace(gamma_fit,
+                          pars = c("mu_beta_paro", "mu_beta_pib", "mu_beta_growth", "mu_beta_salary")) +
+  ggtitle("Modelo gamma") +
+  theme_trace
+
+# Mostrar apilados verticalmente
+(trace_simple / trace_intermedio / trace_gamma) +
+  plot_annotation(title = "Trazas de convergencia comparadas entre modelos",
+                  theme = theme(plot.title = element_text(size = 12, face = "bold")))
+
+
+```
+
+Tras las consideraciones planteadas en clase durante la presentación, se decidió centrar el análisis final exclusivamente en el modelo jerárquico con distribución Gamma. Aunque se ajustaron también modelos más simples, uno con pendientes globales y solo intercepto aleatorio, y otro con jerarquía solo sobre la pendiente del desempleo, la comparación de resultados y la discusión metodológica llevaron a priorizar el modelo más completo por su mayor flexibilidad y adecuación empírica.
+
+La inspección visual de las trazas de convergencia para los parámetros clave muestra un comportamiento estable y bien mezclado en los tres modelos considerados. En el modelo simple, donde todas las pendientes son globales y solo el intercepto varía por región, las cadenas de los coeficientes (beta_paro, beta_pib, beta_growth, beta_salary) presentan una oscilación controlada y sin signos de autocorrelación excesiva o falta de convergencia. Al introducir jerarquía únicamente sobre el parámetro de paro en el modelo intermedio, se mantiene la estabilidad de las cadenas, lo que sugiere que el modelo tolera cierta complejidad sin comprometer la calidad del muestreo.
+
+En el modelo completo, que utiliza una distribución Gamma y jerarquía sobre todos los coeficientes, las trazas siguen mostrando un buen comportamiento. Aunque visualmente las cadenas parecen algo más dispersas, como es esperable en modelos con transformaciones logarítmicas y mayor flexibilidad, no se observan patrones preocupantes ni divergencias.
+
+Por tanto, y en línea con los comentarios recibidos, el resto del análisis se centra exclusivamente en el modelo Gamma jerárquico, que combina adecuadamente la interpretación económica con una especificación estadística robusta.
+
+## Estimaciones
+
+```{r message=FALSE, warning=FALSE,  fig.width = 6, fig.height = 3}
+summary_table <- summary(gamma_fit, pars = c("mu_alpha", "mu_beta_paro", "mu_beta_pib", "mu_beta_growth", "mu_beta_salary",
+                          "shape", "beta_paro_sq", "beta_interaction_paro_pib"))$summary
+
+# Convertir a data frame y mostrar con kable
+kable(round(summary_table, 3), caption = "Resumen de parámetros del modelo")
+
+plot(gamma_fit, pars = c("mu_alpha", "mu_beta_paro", "mu_beta_pib", "mu_beta_growth", "mu_beta_salary",
+                         "beta_paro_sq", "beta_interaction_paro_pib"))
+```
+
+Los parámetros $\mu_{\beta}^{(j)}$ representan los efectos promedio de las covariables sobre la inflación a lo largo de todas las regiones. Su interpretación se realiza en la escala logarítmica de la media $\log \mu_i$.
+
+Los resultados del modelo jerárquico indican que el crecimiento del PIB es el principal predictor positivo de la inflación regional, con un efecto posterior medio de $\mu_{\beta_{\text{growth}}} = 1.53$ y un intervalo de credibilidad del 95% entre $[1.22,\ 1.86]$, lo que evidencia una relación robusta. El intercepto medio $\mu_{\alpha} = 0.51$, en escala logarítmica, corresponde a una inflación esperada en torno a $\exp(0.51) \approx 1.66\%$ cuando las covariables están estandarizadas, valor próximo al objetivo del 2% del BCE.
+
+En contraste, los efectos medios del paro ($\mu_{\beta_{\text{paro}}} = 0.096$), del PIB per cápita ($\mu_{\beta_{\text{pib}}} = -0.046$) y del coste salarial ($\mu_{\beta_{\text{salary}}} = 0.087$) son más modestos y sus intervalos de credibilidad incluyen el cero, lo que sugiere que su impacto no es concluyente a nivel agregado. Tampoco se detectan efectos estadísticamente relevantes en los términos funcionales: el efecto cuadrático del paro ($\beta_{\text{paro}^2}$) y la interacción paro–PIB ($\beta_{\text{paro} \cdot \text{pib}}$) tienen medias cercanas a cero y alta incertidumbre.
+
+Finalmente, el parámetro de forma de la distribución Gamma, $\text{shape} \approx 4.25$, indica una dispersión moderada en la inflación modelada, coherente con la variabilidad observada en los datos.
+
+## Parámetros globales
+
+```{r}
+
+
+posterior_df <- as_draws_df(gamma_fit)
+
+mcmc_areas(
+  posterior_df,
+  pars = c("mu_alpha", "mu_beta_paro", "mu_beta_pib", "mu_beta_growth", "mu_beta_salary"),
+  prob = 0.95
+) +
+  ggtitle("Intervalos de credibilidad del 95% para parámetros globales") +
+  theme_minimal()
+
+```
+
+El crecimiento del PIB es el único factor con evidencia sólida de relación positiva con la inflación regional. El desempleo, el PIB per cápita y el coste salarial muestran efectos mucho más inciertos o heterogéneos, con intervalos que cruzan el cero. Esto valida la decisión de usar un modelo jerárquico, ya que refleja posibles diferencias regionales en los efectos, y destaca la importancia del dinamismo económico como principal impulsor inflacionario.
+
+```{r}
+alpha_draws <- posterior_df %>%
+  select(starts_with("alpha[")) %>%
+  pivot_longer(cols = everything(), names_to = "region", values_to = "alpha")
+
+ggplot(alpha_draws, aes(x = region, y = alpha)) +
+  geom_boxplot() +
+  coord_flip() +
+  labs(title = "Distribución posterior de los interceptos regionales",
+       x = "Región", y = expression(alpha[r])) +
+  theme_minimal()
+
+```
+
+La distribución posterior de los interceptos específicos por región $\alpha_r$, los cuales representan el nivel basal de inflación esperado en cada comunidad autónoma tras controlar por las covariables económicas del modelo (paro, PIB, crecimiento y salario).
+
+Se observa que la mayoría de las distribuciones de $\alpha_r$ se concentran en torno a valores positivos cercanos a 0.5–0.8, aunque con una considerable dispersión en algunas regiones. No hay regiones con un desplazamiento sistemático hacia valores claramente negativos o extraordinariamente altos, lo que sugiere que, una vez controlado por los factores económicos, **no existen diferencias extremas en los niveles estructurales de inflación** entre territorios. Sin embargo, la dispersión y los outliers en los boxplots indican que en algunas regiones hay mayor incertidumbre o variabilidad, probablemente asociada a tamaños muestrales distintos o a observaciones atípicas.
+
+## Distribución posterior
+
+```{r}
+
+# Primer panel: regiones 1–10
+g1 <- mcmc_areas(
+  posterior_df,
+  pars = paste0("beta_growth[", 1:10, "]"),
+  prob = 0.95
+) +
+  ggtitle("Regiones 1–10") +
+  theme_minimal(base_size = 10) +
+  theme(
+    plot.title = element_text(face = "bold", size = 12),
+    axis.text.y = element_text(size = 9),
+    axis.text.x = element_text(size = 9)
+  ) +
+  labs(x = expression(beta[Growth~r]), y = NULL)
+
+# Segundo panel: regiones 11–19
+g2 <- mcmc_areas(
+  posterior_df,
+  pars = paste0("beta_growth[", 11:19, "]"),
+  prob = 0.95
+) +
+  ggtitle("Regiones 11–19") +
+  theme_minimal(base_size = 10) +
+  theme(
+    plot.title = element_text(face = "bold", size = 12),
+    axis.text.y = element_text(size = 9),
+    axis.text.x = element_text(size = 9)
+  ) +
+  labs(x = expression(beta[Growth~r]), y = NULL)
+
+# Combinar
+(g1 | g2) +
+  plot_annotation(
+    title = "Distribución posterior de los efectos regionales del crecimiento del PIB",
+    subtitle = "Intervalos de credibilidad al 95%",
+    theme = theme(
+      plot.title = element_text(face = "bold", size = 14),
+      plot.subtitle = element_text(size = 11)
+    )
+  )
+
+
+```
+
+Este gráfico muestra la distribución posterior de los efectos regionales del crecimiento del PIB sobre la inflación, representados por los coeficientes $\beta_{\text{growth}, r}$ en cada región. Se observa que, aunque todos los efectos son positivos, existe una variabilidad sustancial entre regiones en cuanto a la magnitud y la precisión de estos coeficientes. Algunas regiones como la 5, 6, 14 o 18 presentan efectos particularmente altos, con medianas que superan claramente el valor de 2, lo que indica una fuerte sensibilidad de la inflación al crecimiento económico. En cambio, otras regiones como la 1, 2 o 3 muestran efectos más moderados, pero aún claramente distintos de cero, lo que sugiere que el crecimiento económico es un determinante robusto de la inflación regional en prácticamente todo el territorio.
+
+Desde el punto de vista económico, esta heterogeneidad puede reflejar diferencias estructurales en los mercados laborales, la productividad o el grado de apertura regional al comercio y la inversión. En regiones más dependientes del ciclo económico, una expansión del PIB puede traducirse rápidamente en presión sobre los precios debido a rigideces en la oferta o una mayor propensión al consumo. El modelo jerárquico capta esta diversidad permitiendo que cada región tenga su propio coeficiente de respuesta al crecimiento, lo que enriquece considerablemente la interpretación de la curva de Phillips regional en España y subraya la importancia de adoptar modelos flexibles para capturar la realidad territorial.
+
+```{r}
+mcmc_areas(
+  posterior_df,
+  pars = paste0("beta_paro[", 1:19, "]"),
+  prob = 0.95
+) +
+  ggtitle("Distribución posterior de los efectos regionales del paro",
+          "Intervalos de credibilidad al 95%") +
+  theme_minimal()
+```
+
+El gráfico muestra la distribución posterior de los coeficientes regionales del paro $\beta_{\text{paro}, r}$, es decir, cómo varía el efecto del desempleo sobre la inflación en cada región del modelo jerárquico. A diferencia de lo observado con el crecimiento del PIB, los efectos del paro presentan distribuciones centradas en torno a cero con una marcada superposición de los intervalos de credibilidad. En prácticamente todas las regiones, los intervalos del 95% incluyen el cero, lo que indica que no se puede afirmar con certeza la existencia de un efecto positivo ni negativo uniforme del desempleo sobre la inflación.
+
+Esta ambigüedad puede reflejar varios aspectos. En primer lugar, podría deberse a una relación débil o estructuralmente distinta entre regiones, lo cual es coherente con la visión de que la curva de Phillips no se manifiesta de manera homogénea en contextos regionales. En segundo lugar, también podría estar captando efectos rezagados o dependientes de otros factores no incluidos directamente en el modelo, como la institucionalidad del mercado laboral o políticas específicas de empleo. En cualquier caso, el modelo jerárquico permite evidenciar esta variabilidad e incertidumbre, reforzando la necesidad de considerar enfoques flexibles al estudiar el vínculo entre inflación y paro.
+
+## Posterior Predictiva
+
+A continuación, se generan réplicas predictivas de la inflación a partir de las muestras posteriores del modelo `gamma_fit`. Se utiliza la parametrización de la distribución Gamma en términos de su media $\mu_i$ y parámetro de forma `shape`, tal que:
+
+$$
+\text{Inflation}_i \sim \text{Gamma}(\text{shape}, \text{rate}_i), \quad \text{donde} \quad \text{rate}_i = \frac{\text{shape}}{\mu_i}, \quad \text{y} \quad \log(\mu_i) = \eta_i
+$$
+
+
+
+```{r include=FALSE}
+posterior_df <- as.data.frame(gamma_fit)
+n_sims <- 5000
+N <- stan_data$N
+region <- stan_data$region
+
+inflation_rep <- matrix(NA, nrow = n_sims, ncol = N)
+
+for (s in 1:n_sims) {
+  alpha     <- posterior_df[s, grep("^alpha\\[", names(posterior_df))]
+  beta_paro <- posterior_df$mu_beta_paro[s]
+  beta_pib  <- posterior_df$mu_beta_pib[s]
+  beta_grow <- posterior_df$mu_beta_growth[s]
+  beta_sal  <- posterior_df$mu_beta_salary[s]
+  shape     <- posterior_df$shape[s]
+
+  # Calcular la media en escala natural
+  mu <- as.numeric(alpha[region]) +
+        beta_paro * stan_data$paro +
+        beta_pib  * stan_data$pib +
+        beta_grow * stan_data$pib_growth +
+        beta_sal  * stan_data$salarycost
+
+  mu <- exp(mu)  # pasar de log(mu) a mu
+
+  # Generar predicción desde la distribución Gamma
+  rate <- shape / mu
+  inflation_rep[s, ] <- rgamma(N, shape = shape, rate = rate)
+}
+
+pred_mean <- apply(inflation_rep, 2, mean)
+lower_95  <- apply(inflation_rep, 2, quantile, 0.025)
+upper_95  <- apply(inflation_rep, 2, quantile, 0.975)
+
+ppc_data <- tibble::tibble(
+  y_obs = stan_data$inflation,
+  y_pred = pred_mean,
+  lower = lower_95,
+  upper = upper_95
+)
+```
+
+
+
+### Observaciones vs Predicciones
+
+```{r}
+ppc_data <- ppc_data %>% filter(y_pred < 15)
+
+ggplot(ppc_data, aes(x = y_obs, y = y_pred)) +
+  geom_point(size = 2, alpha = 0.7) +
+  geom_errorbar(aes(ymin = lower, ymax = upper), width = 0.1, alpha = 0.4) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red") +
+  labs(
+    title = "Posterior predictiva: Observado vs Predicho (sin valores extremos)",
+    x = "Inflación observada",
+    y = "Media predicha con IC95%"
+  ) +
+  theme_minimal()
+
+
+```
+
+El gráfico muestra la relación entre la inflación observada y la media de la inflación predicha por el modelo Gamma jerárquico, incluyendo los intervalos de credibilidad al 95%. Aunque se observa una tendencia ascendente general coherente con el comportamiento esperado, las predicciones presentan una considerable dispersión, especialmente en los valores intermedios de inflación (entre 2 y 5), donde los intervalos predictivos son más anchos. Esta variabilidad refleja la naturaleza asimétrica y dispersa de la distribución Gamma utilizada, así como la incertidumbre estructural capturada por el modelo en ciertas regiones o situaciones económicas. A pesar de ello, las predicciones siguen el patrón de las observaciones, lo que sugiere que el modelo es capaz de capturar adecuadamente la dirección general del fenómeno, aunque con limitaciones en la precisión puntual para casos individuales.
+
+### Residuos vs Predicción
+
+```{r}
+ppc_data <- ppc_data %>%
+  mutate(residual = y_obs - y_pred)
+
+ggplot(ppc_data, aes(x = y_pred, y = residual)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  geom_point(alpha = 0.7) +
+  geom_smooth(method = "loess", se = FALSE, color = "blue") +
+  labs(
+    title = "Residuos vs Predicción",
+    x = "Inflación predicha",
+    y = "Residual (observado - predicho)"
+  ) +
+  theme_minimal()
+```
+
+El gráfico de residuos frente a predicción revela un patrón sistemático de desviación que sugiere un posible sesgo del modelo en las colas de la distribución. En particular, para valores bajos de inflación predicha (inferiores a 5), los residuos se distribuyen alrededor de cero, lo que indica una buena calibración en ese rango. Sin embargo, a medida que la inflación predicha aumenta, los residuos tienden a ser negativos, lo que implica que el modelo **tiende a sobreestimar** sistemáticamente los valores altos de inflación. Esta tendencia descendente pronunciada, evidenciada por la curva azul, indica que el modelo Gamma puede estar generando colas demasiado pesadas, o que algunas observaciones con valores de predicción muy elevados no se corresponden con la realidad observada. Esta discrepancia sugiere que, aunque el modelo captura adecuadamente la dirección general del fenómeno, **pierde precisión en los extremos**, y podría beneficiarse de una reevaluación de la especificación funcional o de un modelo robusto alternativo.
+
+### Evaluación predictiva por región (MAE y RMSE)
+
+A continuación se calculan las métricas de error medio absoluto (MAE) y raíz del error cuadrático medio (RMSE) para cada región, utilizando la inflación observada y la media de la distribución posterior predictiva.
+
+```{r}
+
+
+# Crear tibble con datos observados y predichos
+ppc_df <- tibble(
+  region = stan_data$region,
+  y_obs = stan_data$inflation,
+  y_pred = pred_mean
+)
+
+# Calcular MAE y RMSE manualmente
+errores_region <- ppc_df %>%
+  group_by(region) %>%
+  summarise(
+    MAE = mean(abs(y_obs - y_pred)),
+    RMSE = sqrt(mean((y_obs - y_pred)^2))
+  ) %>%
+  arrange(region)
+
+# Mostrar tabla
+kable(errores_region, digits = 3, caption = "MAE y RMSE por región")
+```
+
+Los valores de MAE (Error Absoluto Medio) y RMSE (Raíz del Error Cuadrático Medio) permiten evaluar la calidad de las predicciones del modelo en cada región. La mayoría de las regiones presentan errores contenidos, con MAEs en torno a 1 y RMSEs cercanos a 1.5 o inferiores, lo cual indica un buen ajuste general. No obstante, destaca de forma clara la Región 4, con un MAE de 13.48 y un RMSE de 23.29, valores significativamente superiores al resto. Esto sugiere la presencia de una o varias observaciones extremadamente atípicas en dicha región que el modelo no consigue capturar adecuadamente.
+
+Otras regiones como la 5 y la 11 también presentan errores más elevados (MAE \> 1.9, RMSE \> 2.9), aunque en menor medida que la Región 4. En cambio, regiones como la 2, 8 y 15 muestran un ajuste excelente, con errores por debajo de 0.7. Estas diferencias pueden deberse a la heterogeneidad económica regional o a la influencia de observaciones extremas. En resumen, la evaluación predictiva respalda la utilidad del modelo, aunque sugiere que podría beneficiarse de una inspección o ajuste más específico en algunas regiones problemáticas.
+
+\newpage
+
+# Conclusión
+
+El análisis realizado muestra que la Curva de Phillips, entendida como una relación negativa y sistemática entre inflación y desempleo, **no se cumple de forma homogénea** en el contexto regional español. Si bien en algunas comunidades autónomas se observa un efecto positivo del paro sobre la inflación, este efecto es en general débil, incierto y varía según el territorio. En cambio, el **crecimiento del PIB destaca como el predictor más robusto y consistentemente positivo**, sugiriendo que las dinámicas inflacionarias regionales responden en mayor medida al ciclo económico que a las tensiones del mercado laboral.
+
+El uso de un **modelo bayesiano jerárquico con distribución Gamma** ha permitido representar de forma más realista la **heterogeneidad estructural** entre regiones y la naturaleza positiva, asimétrica y dispersa de la inflación. Esta elección fue respaldada por la **introducción de una priori informativa centrada en el 2%**, en línea con el objetivo del BCE, que ayudó a anclar las estimaciones en un marco económico razonable. Sin embargo, este enfoque también plantea retos, como la posible **colinealidad entre covariables** y la dificultad para establecer direcciones causales claras en fenómenos económicos interrelacionados.
+
+Las gráficas de residuos y las métricas de error (MAE y RMSE) muestran un ajuste satisfactorio para la mayoría de las regiones, aunque se identificaron **valores atípicos** que podrían deberse a eventos económicos excepcionales o errores de medición. La **presencia de inflaciones cercanas a cero o incluso negativas** supuso un desafío técnico que se abordó mediante transformaciones logarítmicas y el uso de una distribución no normal.
+
+En términos de **extensiones futuras**, sería deseable **ampliar el horizonte temporal de los datos** para abarcar varios años y analizar la estabilidad estructural de los efectos estimados. Además, incorporar **expectativas de inflación** (derivadas de encuestas o precios financieros) y variables institucionales podría enriquecer la comprensión de las diferencias regionales. Finalmente, complementar el análisis con **modelos dinámicos como VAR o SVAR** permitiría estudiar relaciones causales en el tiempo, identificar shocks y evaluar mecanismos de transmisión, abordando así algunas de las limitaciones del modelo actual en cuanto a exogeneidad.
+
+# Bibliografía
+
+-   Phillips, A. W. (1958). The Relation between Unemployment and the Rate of Change of Money Wage Rates in the United Kingdom. *Economica*.
+-   Blanchard, O., & Galí, J. (2007). Real Wage Rigidities and the New Keynesian Model. *Journal of Money, Credit and Banking*.
+-   Gelman, A., et al. (2013). *Bayesian Data Analysis*. CRC Press.
