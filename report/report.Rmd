@@ -1,6 +1,6 @@
 ---
 title: 'La Curva de Phillips Regional en España: Un Enfoque Bayesiano Jerárquico'
-author: "Julia Anglada y Mohammed Essabaouni"
+author: "Mohammed Essabaouni"
 output:
   pdf_document: default
   html_document:
