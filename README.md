@@ -36,5 +36,3 @@ Render the report with `rmarkdown::render("report/report.Rmd")`.
 
 Packages: rstan, bayesplot, posterior, dplyr, tidyr, ggplot2, patchwork, readr, knitr, tibble.
 
-## Authors
-Julia Anglada and Mohammed Essabaouni
